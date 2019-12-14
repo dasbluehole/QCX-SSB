@@ -547,6 +547,7 @@ inline int16_t ssb(int16_t in)
   int16_t phase = arctan3(q, i);
 
   int16_t dp = phase - prev_phase;  // phase difference and restriction
+  //dp = (amp) ? dp : 0;  // dp = 0 when amp = 0
   prev_phase = phase;
 
   if(dp < 0) dp = dp + _UA; // make negative phase shifts positive: prevents negative frequencies and will reduce spurs on other sideband
@@ -1456,12 +1457,15 @@ void switch_rxtx(uint8_t tx_enable){
   else _init = 1;
   numSamples = 0;
   if(tx_enable){
+      digitalWrite(RX, LOW);  // TX
       lcd.setCursor(15, 1); lcd.print("T");
       si5351.SendRegister(SI_CLK_OE, 0b11111011); // CLK2_EN=1, CLK1_EN,CLK0_EN=0
-      digitalWrite(RX, LOW);  // TX
+      //if(!mox) TCCR1A &= ~(1 << COM1A1); // disable SIDETONE, prevent interference during TX
+      OCR1AL = 0; // make sure SIDETONE is set to 0%
       TCCR1A |= (1 << COM1B1);  // enable KEY_OUT PWM
   } else {
-      TCCR1A &= ~(1 << COM1B1); digitalWrite(KEY_OUT, LOW); // disable KEY_OUT PWM
+      //TCCR1A |= (1 << COM1A1);  // enable SIDETONE
+      TCCR1A &= ~(1 << COM1B1); digitalWrite(KEY_OUT, LOW); // disable KEY_OUT PWM, prevents interference during RX
       OCR1BL = 0; // make sure PWM (KEY_OUT) is set to 0%
       digitalWrite(RX, !(att == 2)); // RX (enable RX when attenuator not on)
       si5351.SendRegister(SI_CLK_OE, 0b11111100); // CLK2_EN=0, CLK1_EN,CLK0_EN=1
