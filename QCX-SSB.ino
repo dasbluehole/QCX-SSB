@@ -850,7 +850,10 @@ void sdr_rx()
   adc = corr_adc;
 
   static int16_t dc;
-  dc += (adc - dc) / 2;
+  dc += (adc - dc) / 2;  // we lose LSB with this method
+  //dc=0;
+  //dc += (adc - dc) / 16;
+  //dc = (3*dc + adc)/4;
   int16_t ac = adc - dc;     // DC decoupling
 
   int16_t ac2;
@@ -873,6 +876,7 @@ void sdr_rx()
 
         int16_t ac = i + qh;
         static uint8_t absavg256cnt;
+
         if(!(absavg256cnt--)){ _absavg256 = absavg256; absavg256 = 0; } else absavg256 += abs(ac);
 
         if(mode == AM) { // (12%CPU for the mode selection etc)
@@ -901,7 +905,8 @@ void sdr_rx()
             if(filt) ac = filt_var(ac);
         }
         if(mode == CW){
-          if(filt) ac = filt_var(ac << 4) << 2;   //if(filt) ac = filt_var(ac << 6);
+          //if(filt) ac = filt_var(ac << 4) << 2;
+          if(filt) ac = filt_var(ac << 6);
           
           if(cwdec){  // CW decoder enabled?
             char ch = cw(ac >> 0);
@@ -951,6 +956,7 @@ void sdr_rx_2()
 
   static int16_t dc;
   dc += (adc - dc) / 2;
+  //dc = 0;
   int16_t ac = adc - dc;     // DC decoupling
 
   int16_t ac2;
@@ -2050,6 +2056,7 @@ void loop()
     if(menumode == 2){
       lcd.setCursor(0, 1); lcd.cursor(); delay(10); // edits menu item value; make cursor visible
       if(menu == MODE){ // post-handling Mode parameter
+        delay(100);
         change = true;
         si5351.prev_pll_freq = 0;  // enforce PLL reset
         // make more generic: 
