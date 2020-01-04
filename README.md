@@ -64,7 +64,7 @@ _Rationale: This will feed the amplified I/Q signals to the ADC0, ADC1 input, bi
 _Rationale: This will bias the mic input (at DAH line) with 5V and pass the audio to ADC2, biased at AREF/2 V; the key-shaping circuit is digitally switching the voltage supply to the PA (or alternatively directly controlled via PA bias<sup>[note 3](#note3)</sup>)._
 3. To implement multiband support: C1,C5,C8,T1,R64 (remove); at T1 landing pattern (see [QCX Assembly instruction] page 53) install R (1K) over 6-8; R (1K) over 3-4; C (10nF) over 4-8; C30 (30pF); L4 (1uH/16t); replace C25-28,L1-L3 with different LPFs as you wish.
 _Rationale: The resonant elements and the transformer are replaced with a pass-through capacitor._
-4. Upload the hex firmware-file to original or new ATMEGA328/328P chip (here is [latest released hex file] and click on "Assets" below the description). The [standard QCX firmware upload procedure] can be followed (for details <sup>[note 1](#note1)</sup>). You can safely switch between this/original QCX firmware without any issues.
+4. Upload the hex firmware-file to original or new ATMEGA328/328P chip (here is [latest released hex file] and click on "Assets" below the description). The [standard QCX firmware upload procedure] can be followed (for details <sup>[note 1](#note1)</sup>). You can safely switch between this/original QCX firmware without any issues. The fuse settings should be E=FD H=D1 L=F7.
 5. Connect an electret microphone pins (+) to tip and (-) to sleeve of paddle-jack; PTT-switch pins to ring and sleeve (see [X1M-mic]).
 
 Below the layout with components marked in red that needs to be changed; gray components must be installed and blank components may be omitted and some must be remove (see above):

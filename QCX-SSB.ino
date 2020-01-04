@@ -4,7 +4,7 @@
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#define VERSION   "1.01t"
+#define VERSION   "1.01u"
 
 // QCX pin defintion
 #define LCD_D4  0         //PD0
@@ -1092,8 +1092,6 @@ void timer2_stop()
 //
 // Feel free to replace it with your own custom radio implementation :-)
 
-void(* resetFunc)(void) = 0; // declare reset function @ address 0
-
 char blanks[] = "        ";
 #define lcd_blanks() lcd.print(blanks);
 
@@ -1264,7 +1262,7 @@ void switch_rxtx(uint8_t tx_enable){
   //delay(1);
   noInterrupts();
   func_ptr = (tx_enable) ? ((mode == CW) ? dsp_tx_cw : dsp_tx) : sdr_rx;
-  if((!dsp_cap) && (!tx_enable) && vox)  func_ptr = dummy; //hack: for SSB mode, disable rx_dsp during vox mode enabled as it slows down the vox loop too much!
+  if((!dsp_cap) && (!tx_enable) && vox)  func_ptr = dummy; //hack: for SSB mode, disable dsp_rx during vox mode enabled as it slows down the vox loop too much!
   interrupts();
   if(tx_enable) ADMUX = admux[2];
   else _init = 1;
@@ -1325,7 +1323,7 @@ void powerDown()
 { // Reduces power from 110mA to 70mA (back-light on) or 30mA (back-light off), remaining current is probably opamp quiescent current
   lcd.setCursor(0, 1); lcd.print(F("Power-off 73 :-)")); lcd_blanks();
 
-  MCUSR = ~(1<<WDRF);  // fix: wdt_disable() bug
+  MCUSR = ~(1<<WDRF);  // MSY be done before wdt_disable()
   wdt_disable();
 
   timer2_stop();
@@ -1357,11 +1355,15 @@ void powerDown()
 
   set_sleep_mode(SLEEP_MODE_PWR_DOWN);
   sleep_enable();
-  sleep_bod_disable();
   interrupts();
+  sleep_bod_disable();
+  //MCUCR |= (1<<BODS) | (1<<BODSE);  // turn bod off by settings BODS, BODSE; note BODS is reset after three clock-cycles, so quickly go to sleep before it is too late
+  //MCUCR &= ~(1<<BODSE);  // must be done right before sleep
   sleep_cpu();  // go to sleep mode, wake-up by either INT0, INT1, Pin Change, TWI Addr Match, WDT, BOD
   sleep_disable();
-  resetFunc();
+
+  //void(* reset)(void) = 0; reset();   // soft reset by calling reset vector (does not reset registers to defaults)
+  do { wdt_enable(WDTO_15MS); for(;;); } while(0);  // soft reset by trigger watchdog timeout
 }
 
 void show_banner(){
@@ -1446,8 +1448,8 @@ template<typename T> void paramAction(uint8_t action, T& value, const __FlashStr
 }
 uint32_t schedule_time = 0;
 
-static uint8_t pwm_min = 0;    // PWM value for which PA reaches its minimum: 29 when C31 installed;   0 when C31 removed; x for biasing BS170 directly
-static uint8_t pwm_max = 192;  // PWM value for which PA reaches its maximum: 96 when C31 installed; 255 when C31 removed; x for biasing BS170 directly
+static uint8_t pwm_min = 0;    // PWM value for which PA reaches its minimum: 29 when C31 installed;   0 when C31 removed;   0 for biasing BS170 directly
+static uint8_t pwm_max = 192;  // PWM value for which PA reaches its maximum: 96 when C31 installed; 255 when C31 removed; 192 for biasing BS170 directly
 
 const char* offon_label[2] = {"OFF", "ON"};
 const char* filt_label[N_FILT+1] = { "Full", "4000", "2500", "1700", "500", "200", "100", "50" };
@@ -1529,7 +1531,14 @@ void initPins(){
 
 void setup()
 {
+  digitalWrite(KEY_OUT, LOW);  // for safety: to prevent exploding PA MOSFETs, in case there was something still biasing them.
+
 #ifdef DEBUG
+  uint8_t mcusr = MCUSR;
+  MCUSR = 0;
+  //wdt_disable();
+  wdt_enable(WDTO_4S);  // Enable watchdog, resolves QCX startup issue and other issues (bugs)
+
   // Benchmark dsp_tx() ISR (this needs to be done in beginning of setup() otherwise when VERSION containts 5 chars, mis-alignment impact performance by a few percent)
   rx_state = 0;
   uint32_t t0, t1;
@@ -1558,7 +1567,6 @@ void setup()
   //adc_stop();  // recover general ADC settings so that analogRead is working again
 #endif
   ADMUX = (1 << REFS0);  // restore reference voltage AREF (5V)
-  wdt_enable(WDTO_4S);  // Enable watchdog, resolves QCX startup issue and other issues (bugs)
 
   // disable external interrupts
   PCICR = 0;
@@ -1605,6 +1613,23 @@ void setup()
   lcd.setCursor(7, 0); lcd.print(F(" R")); lcd.print(F(VERSION)); lcd_blanks();
 
 #ifdef DEBUG
+  if((mcusr & WDRF) && (!(mcusr & EXTRF))){
+    lcd.setCursor(0, 1); lcd.print(F("!!Watchdog RESET")); lcd_blanks();
+    delay(1500); wdt_reset();
+  }
+  if(mcusr & BORF){
+    lcd.setCursor(0, 1); lcd.print(F("!!Brownout RESET")); lcd_blanks();  // Brow-out reset happened, CPU voltage not stable or make sure Brown-Out threshold is set OK (make sure E fuse is set to FD)
+    delay(1500); wdt_reset();
+  }
+  if(mcusr & PORF){
+    lcd.setCursor(0, 1); lcd.print(F("!!Power-On RESET")); lcd_blanks();
+    delay(1500); wdt_reset();
+  }
+  /*if(mcusr & EXTRF){
+  lcd.setCursor(0, 1); lcd.print(F("Power-On")); lcd_blanks();
+    delay(1); wdt_reset();
+  }*/
+  
   // Measure CPU loads
   if(!(load_tx <= 100.0))
   {
@@ -1698,6 +1723,7 @@ void setup()
 #endif
 
   drive = 4;  // Init settings
+  if(!ssb_cap){ mode = CW; filt = 4; stepsize = STEP_500; }
 
   // Load parameters from EEPROM, reset to factory defaults when stored values are from a different version
   paramAction(LOAD, VERS);
@@ -1859,7 +1885,6 @@ void loop()
             vox = 0;
             continue;  // skip the rest for the moment
           }    
-          //smeter();
           wdt_reset();
         }
       }
@@ -1997,7 +2022,7 @@ void loop()
   }
   
   wdt_reset();
-}  
+}
 
 /* BACKLOG:
 code definitions and re-use for comb, integrator, dc decoupling, arctan
@@ -2023,4 +2048,7 @@ clock
 qcx API demo code
 scan
 si5351 simplification aka https://groups.io/g/BITX20/files/KE7ER/si5351bx_0_0.ino
+unwanted VOX feedback in DSP mode
+move last bit of arrays into flash? https://www.microchip.com/webdoc/AVRLibcReferenceManual/FAQ_1faq_rom_array.html
+remove floats
 */
