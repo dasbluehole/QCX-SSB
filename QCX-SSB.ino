@@ -321,8 +321,11 @@ public:
     SendByte(pll_data[7]);
     stop();
   }
+  
+  #define FAST __attribute__((optimize("Ofast")))
+
   // this function relies on cached (global) variables: divider, mult, raw_freq, pll_data
-  inline void freq_calc_fast(int16_t freq_offset)
+  inline void FAST freq_calc_fast(int16_t freq_offset)
   { // freq_offset is relative to freq set in freq(freq)
     // uint32_t num128 = ((divider * (raw_freq + offset)) % fxtal) * (float)(0xFFFFF * 128) / fxtal;
     // Above definition (for fxtal=27.00491M) can be optimized by pre-calculating factor (0xFFFFF*128)/fxtal (=4.97) as integer constant (5) and
@@ -724,16 +727,6 @@ param_c = avg;
   return ea1;
 }
 
-
-//#define JUNK  1
-#ifdef JUNK
-// Having this function included here and referenced makes sdr_rx faster 15% faster (normally including filt_cwn() in sdr_rx() makes the thing slower for an unknown reason)
-void junk()
-{ 
-    filt_var(0);
-}
-#endif
-
 #define N_FILT 7
 volatile int8_t filt = 0;
 
@@ -783,11 +776,7 @@ inline int16_t filt_var(int16_t v)  //filters build with www.micromodeler.com
 }
 
 typedef void (*func_t)(void);
-#ifdef JUNK
-volatile func_t func_ptr = junk;
-#else
 volatile func_t func_ptr;
-#endif
 
 static uint32_t absavg256 = 0;
 volatile uint32_t _absavg256 = 0;
@@ -796,6 +785,63 @@ volatile int16_t ocomb, i, q, qh;
 #undef  R  // Decimating 2nd Order CIC filter
 #define R 4  // Rate change from 62500/2 kSPS to 7812.5SPS, providing 12dB gain
 volatile uint8_t rx_state = 0;
+
+inline int16_t slow_dsp(int16_t ac)
+{
+  static uint8_t absavg256cnt;
+  if(!(absavg256cnt--)){ _absavg256 = absavg256; absavg256 = 0; } else absavg256 += abs(ac);
+
+  if(mode == AM) { // (12%CPU for the mode selection etc)
+    { static int16_t dc;
+      dc += (i - dc) / 2;
+      i = i - dc; }  // DC decoupling
+    { static int16_t dc;
+      dc += (q - dc) / 2;
+      q = q - dc; }  // DC decoupling
+    //ac = magn(i, q);  //(25%CPU)
+    { static int16_t dc;
+      dc += (ac - dc) / 2;
+      ac = ac - dc; }  // DC decoupling
+  } else if(mode == FM){
+    static int16_t z1;
+    int16_t z0 = arctan3(q, i);
+    ac = z0 - z1; // Differentiator
+    z1 = z0;
+    //ac = ac * (F_SAMP_RX/R) / _UA;  // =ac*3.5 -> skip
+  }  // needs: p.12 https://www.veron.nl/wp-content/uploads/2014/01/FmDemodulator.pdf
+  else { ; }  // USB, LSB, CW
+  if(agc) ac = process_agc(ac);
+  ac = ac >> (16-volume);
+  if(nr) ac = process_nr(ac);
+  if(mode == USB || mode == LSB){
+      if(filt) ac = filt_var(ac);
+  }
+  if(mode == CW){
+    if(filt) ac = filt_var(ac << 0) << 2;
+    //if(filt) ac = filt_var(ac << 6);
+    
+    if(cwdec){  // CW decoder enabled?
+      char ch = cw(ac >> 0);
+      if(ch){
+        for(int i=0; i!=15;i++) out[i]=out[i+1];
+        out[15] = ch;
+        cw_event = true;
+      }
+    }
+    
+  }
+  //if(!(absavg256cnt--)){ _absavg256 = absavg256; absavg256 = 0; } else absavg256 += abs(ac);  //hack
+  
+  //static int16_t dc;
+  //dc += (ac - dc) / 2;
+  //dc = (15*dc + ac)/16;
+  //dc = (15*dc + (ac - dc))/16;
+  //ac = ac - dc;    // DC decoupling
+
+  ac = min(max(ac, -512), 511);
+  //ac = min(max(ac, -128), 127);
+  return ac;
+}
 
 // Non-recursive CIC Filter (M=2, R=4) implementation, so two-stages of (followed by down-sampling with factor 2):
 // H1(z) = (1 + z^-1)^2 = 1 + 2*z^-1 + z^-2 = (1 + z^-2) + (2) * z^-1 = FA(z) + FB(z) * z^-1;
@@ -860,59 +906,8 @@ void sdr_rx()
         i = v[0]; v[0] = v[1]; v[1] = v[2]; v[2] = v[3]; v[3] = v[4]; v[4] = v[5]; v[5] = v[6]; v[6] = v[7];  // Delay to match Hilbert transform on Q branch
 
         int16_t ac = i + qh;
-        static uint8_t absavg256cnt;
-        if(!(absavg256cnt--)){ _absavg256 = absavg256; absavg256 = 0; } else absavg256 += abs(ac);
+        ac = slow_dsp(ac);
 
-        if(mode == AM) { // (12%CPU for the mode selection etc)
-          { static int16_t dc;
-            dc += (i - dc) / 2;
-            i = i - dc; }  // DC decoupling
-          { static int16_t dc;
-            dc += (q - dc) / 2;
-            q = q - dc; }  // DC decoupling
-          ac = magn(i, q);  //(25%CPU)
-          { static int16_t dc;
-            dc += (ac - dc) / 2;
-            ac = ac - dc; }  // DC decoupling
-        } else if(mode == FM){
-          static int16_t z1;
-          int16_t z0 = arctan3(q, i);
-          ac = z0 - z1; // Differentiator
-          z1 = z0;
-          //ac = ac * (F_SAMP_RX/R) / _UA;  // =ac*3.5 -> skip
-        }  // needs: p.12 https://www.veron.nl/wp-content/uploads/2014/01/FmDemodulator.pdf
-        else { ; }  // USB, LSB, CW
-        if(agc) ac = process_agc(ac);
-        ac = ac >> (16-volume);
-        if(nr) ac = process_nr(ac);
-        if(mode == USB || mode == LSB){
-            if(filt) ac = filt_var(ac);
-        }
-        if(mode == CW){
-          if(filt) ac = filt_var(ac << 0) << 2;
-          //if(filt) ac = filt_var(ac << 6);
-          
-          if(cwdec){  // CW decoder enabled?
-            char ch = cw(ac >> 0);
-            if(ch){
-              for(int i=0; i!=15;i++) out[i]=out[i+1];
-              out[15] = ch;
-              cw_event = true;
-            }
-          }
-          
-        }
-        //if(!(absavg256cnt--)){ _absavg256 = absavg256; absavg256 = 0; } else absavg256 += abs(ac);  //hack
-        
-        //static int16_t dc;
-        //dc += (ac - dc) / 2;
-        //dc = (15*dc + ac)/16;
-        //dc = (15*dc + (ac - dc))/16;
-        //ac = ac - dc;    // DC decoupling
-
-        ac = min(max(ac, -512), 511);
-        //ac = min(max(ac, -128), 127);
-    
         // Output stage
         static int16_t ozd1, ozd2;
         if(_init){ ac = 0; ozd1 = 0; ozd2 = 0; _init = 0; } // hack: on first sample init accumlators of further stages (to prevent instability)
@@ -1008,6 +1003,10 @@ inline void sdr_rx_common()
   //if(volume) OCR1AL = min(max((ozi1>>5) + 128, 0), 255);  //if(volume) OCR1AL = min(max((ozi2>>5) + ICR1L/2, 0), ICR1L);  // center and clip wrt PWM working range
 #endif
 }
+
+//#pragma GCC push_options
+//#pragma GCC optimize ("Ofast")  // compiler-optimization for speed
+//#pragma GCC pop_options  // end of DSP section
 
 ISR(TIMER2_COMPA_vect)  // Timer2 COMPA interrupt
 {
@@ -2051,4 +2050,9 @@ si5351 simplification aka https://groups.io/g/BITX20/files/KE7ER/si5351bx_0_0.in
 unwanted VOX feedback in DSP mode
 move last bit of arrays into flash? https://www.microchip.com/webdoc/AVRLibcReferenceManual/FAQ_1faq_rom_array.html
 remove floats
+
+
+Analyse assembly:
+/home/guido/Downloads/arduino-1.8.10/hardware/tools/avr/bin/avr-g++ -S -g -Os -w -std=gnu++11 -fpermissive -fno-exceptions -ffunction-sections -fdata-sections -fno-threadsafe-statics -Wno-error=narrowing -MMD -mmcu=atmega328p -DF_CPU=16000000L -DARDUINO=10810 -DARDUINO_AVR_UNO -DARDUINO_ARCH_AVR -I/home/guido/Downloads/arduino-1.8.10/hardware/arduino/avr/cores/arduino -I/home/guido/Downloads/arduino-1.8.10/hardware/arduino/avr/variants/standard /tmp/arduino_build_483134/sketch/QCX-SSB.ino.cpp -o /tmp/arduino_build_483134/sketch/QCX-SSB.ino.cpp.txt
+
 */
