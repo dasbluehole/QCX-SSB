@@ -1,10 +1,10 @@
 //  QCX-SSB.ino - https://github.com/threeme3/QCX-SSB
-//  
+//
 //  Copyright 2019, 2020   Guido PE1NNZ <pe1nnz@amsat.org>
 //
 //  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions: The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-#define VERSION   "1.01u"
+#define VERSION   "1.01v"
 
 // QCX pin defintion
 #define LCD_D4  0         //PD0
@@ -32,6 +32,8 @@
 #include <inttypes.h>
 #include <avr/sleep.h>
 #include <avr/wdt.h>
+
+//FUSES = { .low = 0xF7, .high = 0xD1, .extended = 0xFD };   // Fuse settings should be E=FD H=D1 L=F7, at programming.
 
 class LCD : public Print {  // inspired by: http://www.technoblogy.com/show?2BET
 public:  // LCD1602 display in 4-bit mode, RS is pull-up and kept low when idle to prevent potential display RFI via RS line
@@ -556,7 +558,10 @@ void dsp_tx()
   int16_t adc = ADC - 512; // current ADC sample 10-bits analog input, NOTE: first ADCL, then ADCH
   int16_t df = ssb(adc >> MIC_ATTEN);  // convert analog input into phase-shifts (carrier out by periodic frequency shifts)
   si5351.freq_calc_fast(df);           // calculate SI5351 registers based on frequency shift and carrier frequency
-  //if(OCR1BL == 0){ si5351.SendRegister(SI_CLK_OE, (amp) ? 0b11111011 : 0b11111111); } // experimental carrier-off for low amplitudes
+#define CARRIER_COMPLETELY_OFF_ON_LOW  1
+#ifdef CARRIER_COMPLETELY_OFF_ON_LOW
+  if(OCR1BL == 0){ si5351.SendRegister(SI_CLK_OE, (amp) ? 0b11111011 : 0b11111111); } // experimental carrier-off for low amplitudes
+#endif
 
   if(!mox) return;
   OCR1AL = (adc << (mox-1)) + 128;  // TX audio monitoring
@@ -775,16 +780,9 @@ inline int16_t filt_var(int16_t v)  //filters build with www.micromodeler.com
   return zx0;
 }
 
-typedef void (*func_t)(void);
-volatile func_t func_ptr;
-
 static uint32_t absavg256 = 0;
 volatile uint32_t _absavg256 = 0;
-volatile uint8_t admux[3];
-volatile int16_t ocomb, i, q, qh;
-#undef  R  // Decimating 2nd Order CIC filter
-#define R 4  // Rate change from 62500/2 kSPS to 7812.5SPS, providing 12dB gain
-volatile uint8_t rx_state = 0;
+volatile int16_t i, q;
 
 inline int16_t slow_dsp(int16_t ac)
 {
@@ -792,13 +790,13 @@ inline int16_t slow_dsp(int16_t ac)
   if(!(absavg256cnt--)){ _absavg256 = absavg256; absavg256 = 0; } else absavg256 += abs(ac);
 
   if(mode == AM) { // (12%CPU for the mode selection etc)
-    { static int16_t dc;
+    /*{ static int16_t dc;
       dc += (i - dc) / 2;
       i = i - dc; }  // DC decoupling
     { static int16_t dc;
       dc += (q - dc) / 2;
-      q = q - dc; }  // DC decoupling
-    //ac = magn(i, q);  //(25%CPU)
+      q = q - dc; }  // DC decoupling  */
+    ac = magn(i, q);  //(25%CPU)
     { static int16_t dc;
       dc += (ac - dc) / 2;
       ac = ac - dc; }  // DC decoupling
@@ -843,6 +841,17 @@ inline int16_t slow_dsp(int16_t ac)
   return ac;
 }
 
+typedef void (*func_t)(void);
+volatile func_t func_ptr;
+#undef  R  // Decimating 2nd Order CIC filter
+#define R 4  // Rate change from 62500/2 kSPS to 7812.5SPS, providing 12dB gain
+
+//#define SIMPLE_RX  1
+#ifndef SIMPLE_RX
+volatile uint8_t admux[3];
+volatile int16_t ocomb, qh;
+volatile uint8_t rx_state = 0;
+
 // Non-recursive CIC Filter (M=2, R=4) implementation, so two-stages of (followed by down-sampling with factor 2):
 // H1(z) = (1 + z^-1)^2 = 1 + 2*z^-1 + z^-2 = (1 + z^-2) + (2) * z^-1 = FA(z) + FB(z) * z^-1;
 // with down-sampling before stage translates into poly-phase components: FA(z) = 1 + z^-1, FB(z) = 2
@@ -856,8 +865,6 @@ void sdr_rx()
   func_ptr = sdr_rx_2;    // processing function for next conversion
   sdr_rx_common();
   
-  static int16_t zi1, zi2, zd1, zd2;
-
   // Only for I: correct I/Q sample delay by means of linear interpolation
   static int16_t prev_adc;
   int16_t corr_adc = (prev_adc + adc) / 2;
@@ -1003,10 +1010,107 @@ inline void sdr_rx_common()
   //if(volume) OCR1AL = min(max((ozi1>>5) + 128, 0), 255);  //if(volume) OCR1AL = min(max((ozi2>>5) + ICR1L/2, 0), ICR1L);  // center and clip wrt PWM working range
 #endif
 }
+#endif
 
+#ifdef SIMPLE_RX
+volatile uint8_t admux[3];
+static uint8_t rx_state = 0;
+
+static struct rx {
+  int16_t z1;
+  int16_t za1;
+  int16_t _z1;
+  int16_t _za1;
+} rx_inst[2];
+
+void sdr_rx()
+{
+  static int16_t ocomb;
+  static int16_t qh;
+
+  uint8_t b = !(rx_state & 0x01);
+  rx* p = &rx_inst[b];
+  uint8_t _rx_state;
+  int16_t ac;
+  if(b){  // rx_state == 0, 2, 4, 6 -> I-stage
+    ADMUX = admux[1];  // set MUX for next conversion
+    ADCSRA |= (1 << ADSC);    // start next ADC conversion
+    ac = ADC - 512; // current ADC sample 10-bits analog input, NOTE: first ADCL, then ADCH
+
+    //sdr_common
+    static int16_t ozi1, ozi2;
+    if(_init){ ocomb=0; ozi1 = 0; ozi2 = 0; } // hack
+    // Output stage [25% CPU@R=4;Fs=62.5k]
+    #define SECOND_ORDER_DUC 1
+    #ifdef SECOND_ORDER_DUC
+    ozi2 = ozi1 + ozi2;          // Integrator section
+    #endif
+    ozi1 = ocomb + ozi1;
+    #ifdef SECOND_ORDER_DUC
+    if(volume) OCR1AL = min(max((ozi2>>5) + 128, 0), 255);  //if(volume) OCR1AL = min(max((ozi2>>5) + ICR1L/2, 0), ICR1L);  // center and clip wrt PWM working range
+    #else
+    if(volume) OCR1AL = (ozi1>>5) + 128;
+    //if(volume) OCR1AL = min(max((ozi1>>5) + 128, 0), 255);  //if(volume) OCR1AL = min(max((ozi2>>5) + ICR1L/2, 0), ICR1L);  // center and clip wrt PWM working range
+    #endif
+    // Only for I: correct I/Q sample delay by means of linear interpolation
+    static int16_t prev_adc;
+    int16_t corr_adc = (prev_adc + ac) / 2;
+    prev_adc = ac;
+    ac = corr_adc;
+    _rx_state = ~rx_state;
+  } else {
+    ADMUX = admux[0];  // set MUX for next conversion
+    ADCSRA |= (1 << ADSC);    // start next ADC conversion
+    ac = ADC - 512; // current ADC sample 10-bits analog input, NOTE: first ADCL, then ADCH
+    _rx_state = rx_state;
+  }
+    
+  if(_rx_state & 0x02){  // rx_state == I: 0, 4  Q: 3, 7  1st stage: down-sample by 2
+    int16_t _ac = ac + p->za1 + p->z1 * 2;           // 1st stage: FA + FB
+    p->za1 = ac;
+    if(_rx_state & 0x04){                   // rx_state == I: 0  Q:7   2nd stage: down-sample by 2
+      int16_t ac2 = _ac + p->_za1 + p->_z1 * 2;              // 2nd stage: FA + FB
+      p->_za1 = _ac;
+      if(b){
+        // post processing I and Q (down-sampled) results
+        static int16_t v[8];
+        v[7] = ac2 >> att2;
+        
+        i = v[0]; v[0] = v[1]; v[1] = v[2]; v[2] = v[3]; v[3] = v[4]; v[4] = v[5]; v[5] = v[6]; v[6] = v[7];  // Delay to match Hilbert transform on Q branch
+
+        int16_t ac = i + qh;
+        ac = slow_dsp(ac);
+
+        // Output stage
+        static int16_t ozd1, ozd2;
+        if(_init){ ac = 0; ozd1 = 0; ozd2 = 0; _init = 0; } // hack: on first sample init accumlators of further stages (to prevent instability)
+        #ifdef SECOND_ORDER_DUC
+        int16_t od1 = ac - ozd1; // Comb section
+        ocomb = od1 - ozd2;
+        ozd2 = od1;
+        #else
+        ocomb = ac - ozd1; // Comb section
+        #endif
+        ozd1 = ac;
+      } else {
+        // Process Q (down-sampled) samples
+        static int16_t v[16];
+        v[15] = ac2 >> att2;
+
+        for(uint8_t j = 0; j != 15; j++) v[j] = v[j + 1];
+        q = v[7];
+        qh = ((v[0] - v[14]) * 2 + (v[2] - v[12]) * 8 + (v[4] - v[10]) * 21 + (v[6] - v[8]) * 15) / 128 + (v[6] - v[8]) / 2; // Hilbert transform, 40dB side-band rejection in 400..1900Hz (@4kSPS) when used in image-rejection scenario; (Hilbert transform require 5 additional bits)
+      }
+    } else p->_z1 = _ac;
+  } else p->z1 = ac;  // rx_state == I: 2, 6  Q: 1, 5
+
+  rx_state++;
+}
 //#pragma GCC push_options
 //#pragma GCC optimize ("Ofast")  // compiler-optimization for speed
 //#pragma GCC pop_options  // end of DSP section
+// */
+#endif
 
 ISR(TIMER2_COMPA_vect)  // Timer2 COMPA interrupt
 {
@@ -1015,6 +1119,65 @@ ISR(TIMER2_COMPA_vect)  // Timer2 COMPA interrupt
   numSamples++;
 #endif
 }
+
+/*
+ISR(TIMER2_COMPA_vect, ISR_NAKED)  // Timer2 COMPA interrupt, naked ISR: no prologue/epilogue generated (an ISR takes at least 38 clock cycles)
+{
+  asm volatile( //prologue (register explanation: https://stackoverflow.com/questions/23943129/gcc-generating-useless-code-in-isr )
+  "push r1\n\r"  //Fixed Registers: R1 always contains zero. During an insn the content might be destroyed, e.g. by a MUL instruction that uses R0/R1 as implicit output register. If an insn destroys R1, the insn must restore R1 to zero afterwards. This register must be saved in ISR prologues and must then be set to zero because R1 might contain values other than zero. The ISR epilogue restores the value. In inline assembler you can use __zero_reg__ for the zero register.
+  "push r0\n\r"  //Fixed Registers: R0 is used as scratch register that need not to be restored after its usage. It must be saved and restored in interrupt service routine's (ISR) prologue and epilogue. In inline assembler you can use __tmp_reg__ for the scratch register.
+  "in r0,__SREG__\n\r"
+  "push r0\n\r"
+  "clr __zero_reg__\n\r"
+  "push r18\n\r" //Call-Clobbered Registers: R18–R27, R30, R31 These GPRs are call clobbered. An ordinary function may use them without restoring the contents. Interrupt service routines (ISRs) must save and restore each register they use.
+  "push r19\n\r"
+  "push r20\n\r"
+  "push r21\n\r"
+  "push r22\n\r"
+  "push r23\n\r"
+  "push r24\n\r"
+  "push r25\n\r"
+  "push r26\n\r"
+  "push r27\n\r"
+  "push r30\n\r"
+  "push r31\n\r"
+  );             // Call-Saved Registers: R2–R17, R28, R29 The remaining GPRs are call-saved, i.e. a function that uses such a registers must restore its original content. This applies even if the register is used to pass a function argument.
+  func_ptr();
+//  asm volatile(
+//  "lds r30,func_ptr\n\r"
+//  "lds r31,func_ptr+1\n\r"
+//  "icall\n\r"
+//  );
+#ifdef DEBUG
+  //numSamples++;
+  asm volatile(
+  "lds r24,numSamples\n\r"
+  "lds r25,numSamples+1\n\r"
+  "adiw r24,1\n\r"
+  "sts numSamples+1,r25\n\r"
+  "sts numSamples,r24\n\r"
+  );
+#endif
+  asm volatile( //epilogue
+  "pop r31\n\r"
+  "pop r30\n\r"
+  "pop r27\n\r"
+  "pop r26\n\r"
+  "pop r25\n\r"
+  "pop r24\n\r"
+  "pop r23\n\r"
+  "pop r22\n\r"
+  "pop r21\n\r"
+  "pop r20\n\r"
+  "pop r19\n\r"
+  "pop r18\n\r"
+  "pop r0\n\r"
+  "out __SREG__,r0\n\r"
+  "pop r0\n\r"
+  "pop r1\n\r"
+  "reti\n\r"
+  );
+}*/
 
 void adc_start(uint8_t adcpin, bool ref1v1, uint32_t fs)
 {
@@ -1612,11 +1775,11 @@ void setup()
   lcd.setCursor(7, 0); lcd.print(F(" R")); lcd.print(F(VERSION)); lcd_blanks();
 
 #ifdef DEBUG
-  if((mcusr & WDRF) && (!(mcusr & EXTRF))){
+  if((mcusr & WDRF) && (!(mcusr & EXTRF)) && (!(mcusr & BORF))){
     lcd.setCursor(0, 1); lcd.print(F("!!Watchdog RESET")); lcd_blanks();
     delay(1500); wdt_reset();
   }
-  if(mcusr & BORF){
+  if((mcusr & BORF) && (!(mcusr & WDRF))){
     lcd.setCursor(0, 1); lcd.print(F("!!Brownout RESET")); lcd_blanks();  // Brow-out reset happened, CPU voltage not stable or make sure Brown-Out threshold is set OK (make sure E fuse is set to FD)
     delay(1500); wdt_reset();
   }
@@ -1640,7 +1803,7 @@ void setup()
   {
     lcd.setCursor(0, 1); lcd.print(F("!!CPU_rx")); lcd.print(F("=")); lcd.print(load_rx_avg); lcd.print(F("%")); lcd_blanks();
     delay(1500); wdt_reset();
-    // and specify indivual timings for each of the eight alternating processing functions:
+    // and specify individual timings for each of the eight alternating processing functions:
     for(i = 1; i != 8; i++){
       if(!(load_rx[i] <= 100.0))
       {
@@ -1752,7 +1915,7 @@ void setup()
 
 void loop()
 {
-  delay(10);
+  //delay(10);
 
   if(menumode == 0){
     smeter();
@@ -1853,7 +2016,33 @@ void loop()
         change = true; // refresh display
         break;
       case BR|PL:
-      { //int16_t x = 0;
+      {
+        #ifdef SIMPLE_RX
+        // Experiment: ISR-less sdr_rx():
+        smode = 0;
+        TIMSK2 &= ~(1 << OCIE2A);  // disable timer compare interrupt
+        delay(100);
+        lcd.setCursor(15, 1); lcd.print("X");
+        static uint8_t x = 0;
+        uint32_t next = 0;
+        for(;;){
+          func_ptr();
+        #ifdef DEBUG
+          numSamples++;
+        #endif
+          if(!rx_state){
+            x++;
+            if(x > 16){
+              loop();
+              //lcd.setCursor(9, 0); lcd.print((int16_t)100); lcd.print(F("dBm   "));  // delays are taking too long!
+              x= 0;
+            }
+          }
+          //for(;micros() < next;);  next = micros() + 16;   // sync every 1000000/62500=16ms (or later if missed)
+        } //
+        #endif //SIMPLE_RX
+               
+        //int16_t x = 0;
         lcd.setCursor(15, 1); lcd.print("V");
         for(; !digitalRead(BUTTONS);){ // while in VOX mode
           
@@ -2029,7 +2218,7 @@ in func_ptr for different mode types
 refactor main()
 agc based on rms256, agc/smeter after filter
 noisefree integrator (rx audio out) in lower range
-raised cosine tx amp for cw
+raised cosine tx amp for cw, 4ms tau seems enough: http://fermi.la.asu.edu/w9cf/articles/click/index.html
 auto paddle
 cw tx message/cw encoder
 32 bin fft

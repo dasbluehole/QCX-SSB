@@ -56,6 +56,8 @@ If you just want to try out the firmware, you can upload and use it in an unmodi
 
 To make the SDR+SSB modification, you need to remove 9 and change 8 components, install 10 wires, upload firmware and connect a microphone. On a newly to be build QCX, 46 components can be left out.
 
+Please note that if you apply the mod on a QCX Rev5, you have in addition to convert back to the original Rev4 circuit, ie. restore: R49, R50, C39, R53, (C21, C22 excluded) see [Rev5 changes].
+
 Change the following component values (and type of component in some cases), and wire the following component pins on the backside PCB (some pins must be disconnected from the pad):
 
 1. To implement the SDR receiver: R11,12,R14,R15,17,59 (remove); IC6-10,R11-40,R59-60,C9-24,C52-53,D5,Q7 (optionally omit on new builds); change R7,10(82k); C4,C7(1nF); wire IC2(pin15) to IC10(pin1); disconnect R50-(to 5V) pin and R52-5V and both wire to IC2(pin25); disconnect pin C39(to R27) and wire to IC5(pin1); disconnect pin C40(-to R27) and wire to IC5(pin7).
@@ -158,7 +160,7 @@ The following performance measurements were made with QCX-SSB R1.01, a modified 
 1. <a name="note1"/>Firmware upload variations:
 - [AVRDudess] tool or avrdude CLI can be used for uploading the firmware via the ISP connector on the QCX. Follow [Arduino as ISP] instructions if you have a Arduino UNO board available (tip: use female-to-male breadboard cables to connect Arduino to QCX ISP jumper); or [USBasp] instructions if you have a USBasp programmer, alternatively use [USPasp ExtremeBurner]; but many other ISP programmers can be used in similar manner such as [USBtiny] or AVRisp mkII. During ISP, mic should be disconnected, power supply should be connected; in tool do not erase, program EEPROM or set fuse settings (they are by default ok: E=FD H=D1 L=F7).
 - Alternatively, in case you have an ATMEGA328P chip with Arduino bootloader, you can place the chip in an Arduino UNO board and upload directly (without the need for a ISP cable and QCX) by specifying 'arduino' programmer and baudrate 115200.
-- Alternatively, in case you have an [Arduino] environment installed, you can upload the [QCX-SSB Sketch] directly from the Arduino environment (without using AVRDudess and firmware file); make sure "Tools > Board > Arduino/Genuino Uno",  "Tools > Port > /dev/ttyUSB0 or ttyACM0", and then "Sketch > Upload" is selected, while the ATMEGA328P chip is placed in the Arduino UNO socket. It is also possible to use [Arduino as ISP] method: upload this variation of [ArduinoISP] to the Arduino board and select "Tools > Programmer > Arduino as ISP", and "Sketch > Upload Using Programmer".
+- Alternatively, in case you have an [Arduino 1.8.9] environment installed, you can upload the [QCX-SSB Sketch] directly from the Arduino environment (without using AVRDudess and firmware file); make sure "Tools > Board > Arduino/Genuino Uno",  "Tools > Port > /dev/ttyUSB0 or ttyACM0", and then "Sketch > Upload" is selected, while the ATMEGA328P chip is placed in the Arduino UNO socket. It is also possible to use [Arduino as ISP] method: upload this variation of [ArduinoISP] to the Arduino board and select "Tools > Programmer > Arduino as ISP", and "Sketch > Upload Using Programmer".
 2. <a name="note2"/>The occupied SSB bandwidth can be further reduced by restricting the maximum phase change (set MAX_DP to half a unit-circle _UA/2 (equivalent to 180 degrees)). The sensitivity of the VOX switching can be set with parameter VOX_THRESHOLD. Audio-input can be attenuated by increasing parameter MIC_ATTEN (6dB per step).
 3. Alternatively, the PA MOSFETs can be directly biased by the PWM envelope signal, basically making the key-shaping circuit redundant. To do so, Q6,Q4,R41,R42,C32,C31 can be removed entirely, whereby C-E pads of Q6 are wired, and where a 100nF capacitor is inserted at IC3A-pin3 and G of Q1-3, and where a 10k resistor is placed at G-D pads of Q4, a 10nF capacitor between S-D pads of Q4, and where a 10k resistor is placed between D of Q4 and G of Q1-3.
 
@@ -175,6 +177,8 @@ The following performance measurements were made with QCX-SSB R1.01, a modified 
 --->
 
 [original schematic]: https://qrp-labs.com/images/qcx/HiRes.png
+
+[Rev5 changes]: https://groups.io/g/QRPLabs/message/42095
 
 [QCX-SSB]: https://github.com/threeme3/QCX-SSB
 
@@ -199,6 +203,8 @@ The following performance measurements were made with QCX-SSB R1.01, a modified 
 [AVRDudess]: http://zakkemble.net/avrdudess
 
 [Arduino]: https://www.arduino.cc/en/main/software#download
+
+[Arduino 1.8.9]: https://www.arduino.cc/en/Main/OldSoftwareReleases#previous
 
 [ArduinoISP]: https://raw.githubusercontent.com/adafruit/ArduinoISP/master/ArduinoISP.ino
 
