@@ -1749,27 +1749,28 @@ void setup()
   // Test if QCX has DSP/SDR capability: SIDETONE output disconnected from AUDIO2
   si5351.SendRegister(SI_CLK_OE, 0b11111111); // Mute QSD: CLK2_EN=CLK1_EN,CLK0_EN=0  
   digitalWrite(RX, HIGH);  // generate pulse on SIDETONE and test if it can be seen on AUDIO2
-  delay(100); // settle
+  delay(1); // settle
   digitalWrite(SIDETONE, LOW);
   int16_t v1 = analogRead(AUDIO2);
   digitalWrite(SIDETONE, HIGH);
   int16_t v2 = analogRead(AUDIO2);
   digitalWrite(SIDETONE, LOW);
-  dsp_cap = (v2 - v1) < (0.1 * 1024.0 / 5.0);  // DSP capability?
-  
-  // Test if QCX has SDR capability: AUDIO2 is disconnected from AUDIO1
-  delay(400); wdt_reset(); // settle:  the following test only works well 400ms after startup
-  v1 = analogRead(AUDIO1);
-  pinMode(AUDIO2, OUTPUT);  // generate pulse on AUDIO2 and test if it can be seen on AUDIO1
-  digitalWrite(AUDIO2, HIGH);
-  delay(5);
-  digitalWrite(AUDIO2, LOW);
-  v2 = analogRead(AUDIO1);
-  pinMode(AUDIO2, INPUT);
-  digitalWrite(AUDIO2, LOW);
-  if((dsp_cap) && (v2 - v1) < 8) dsp_cap = SDR;  // SDR capacility?
-  // Test if QCX has SSB capability: DVM is biased
-  ssb_cap = analogRead(DVM) > 369;
+  dsp_cap = !(abs(v2 - v1) > (0.5 * 1024.0 / 5.0));  // DSP capability?
+  if(dsp_cap){  // Test if QCX has SDR capability: AUDIO2 is disconnected from AUDIO1  (only if tghere is DSP capability)
+    delay(400); wdt_reset(); // settle:  the following test only works well 400ms after startup
+    v1 = analogRead(AUDIO1);
+    digitalWrite(AUDIO2, HIGH);   // generate pulse on AUDIO2 and test if it can be seen on AUDIO1
+    pinMode(AUDIO2, OUTPUT);
+    delay(1);
+    digitalWrite(AUDIO2, LOW); 
+    delay(1);
+    digitalWrite(AUDIO2, HIGH);
+    v2 = analogRead(AUDIO1);
+    pinMode(AUDIO2, INPUT);
+    if(!(abs(v2 - v1) > (0.010 * 1024.0 / 5.0))) dsp_cap = SDR;  // SDR capacility?
+  }
+  // Test if QCX has SSB capability: DVM is biased at AREF/2(=currently 2.5V)
+  ssb_cap = analogRead(DVM) > (1.8 * 1024.0 / 5.0);
 
   show_banner();
   lcd.setCursor(7, 0); lcd.print(F(" R")); lcd.print(F(VERSION)); lcd_blanks();
