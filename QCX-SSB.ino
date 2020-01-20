@@ -272,7 +272,7 @@ public:
     #define _MSC  0x80000  //0x80000: 98% CPU load   0xFFFFF: 114% CPU load
     uint32_t msb128 = _msb128 + ((int64_t)(_div * (int32_t)df) * _MSC * 128) / fxtal;
 
-    //#define _MSC  0xFFFFF  // Old algorithm 114% CPU load
+    //#define _MSC  0xFFFFF  // Old algorithm 114% CPU load, shortcut for a fixed fxtal=27e6
     //register uint32_t xmsb = (_div * (_fout + (int32_t)df)) % fxtal;  // xmsb = msb * fxtal/(128 * _MSC);
     //uint32_t msb128 = xmsb * 5*(32/32) - (xmsb/32);  // msb128 = xmsb * 159/32, where 159/32 = 128 * 0xFFFFF / fxtal; fxtal=27e6
 
@@ -1001,10 +1001,8 @@ inline int16_t slow_dsp(int16_t ac)
   if(agc) ac = process_agc(ac);
   ac = ac >> (16-volume);
   if(nr) ac = process_nr(ac);
-  if(filt) ac = filt_var(ac);
-  if(mode == CW){
-    if(filt) ac = ac << 2;
-    
+  if(filt) ac = filt_var(ac) << 2;
+  if(mode == CW){    
     if(cwdec){  // CW decoder enabled?
       char ch = cw(ac >> 0);
       if(ch){
@@ -2107,8 +2105,8 @@ void loop()
       for(; digitalRead(BUTTONS);){ // until released, or encoder is turned while longpress
         if(encoder_val && event == PL){ event = PT; break; }
         wdt_reset();
-      }
-      event |= (v < 862) ? BL : (v < 1023) ? BR : BE; // determine which button pressed based on threshold levels
+      }  // Max. voltages at ADC3 for buttons L,R,E: 3.76V;4.55V;5V, thresholds are in center
+      event |= (v < (4.2 * 1024.0 / 5.0)) ? BL : (v < (4.8 * 1024.0 / 5.0)) ? BR : BE; // determine which button pressed based on threshold levels
     } else {  // hack: fast forward handling
       event = (event&0xf0) | ((encoder_val) ? PT : PL);  // only alternate bewteen push-long/turn when applicable
     }
@@ -2390,7 +2388,6 @@ faster RX-TX switch to support CW
 clock
 qcx API demo code
 scan
-si5351 simplification aka https://groups.io/g/BITX20/files/KE7ER/si5351bx_0_0.ino
 unwanted VOX feedback in DSP mode
 move last bit of arrays into flash? https://www.microchip.com/webdoc/AVRLibcReferenceManual/FAQ_1faq_rom_array.html
 remove floats
@@ -2398,5 +2395,9 @@ remove floats
 
 Analyse assembly:
 /home/guido/Downloads/arduino-1.8.10/hardware/tools/avr/bin/avr-g++ -S -g -Os -w -std=gnu++11 -fpermissive -fno-exceptions -ffunction-sections -fdata-sections -fno-threadsafe-statics -Wno-error=narrowing -MMD -mmcu=atmega328p -DF_CPU=16000000L -DARDUINO=10810 -DARDUINO_AVR_UNO -DARDUINO_ARCH_AVR -I/home/guido/Downloads/arduino-1.8.10/hardware/arduino/avr/cores/arduino -I/home/guido/Downloads/arduino-1.8.10/hardware/arduino/avr/variants/standard /tmp/arduino_build_483134/sketch/QCX-SSB.ino.cpp -o /tmp/arduino_build_483134/sketch/QCX-SSB.ino.cpp.txt
+
+10,11,13,12   10,11,12,13  (pin)
+Q- I+ Q+ I-   Q- I+ Q+ I-
+90 deg.shift  div/2@S1(pin2)
 
 */
